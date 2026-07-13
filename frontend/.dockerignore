@@ -1,0 +1,15 @@
+node_modules/
+.next/
+out/
+build/
+.env.local
+.env.production
+.env.development
+.env.staging
+.git
+.gitignore
+Dockerfile
+.dockerignore
+README.md
+eslint.config.mjs
+tsconfig.tsbuildinfo

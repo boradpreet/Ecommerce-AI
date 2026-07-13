@@ -1,0 +1,132 @@
+# Project name pinned so named volumes resolve to voqly_ai_* regardless of the
+# directory compose is run from. This preserves data across the move to /projects/voqly.
+name: voqly_ai
+
+services:
+  # 1. PostgreSQL Database Service
+  db:
+    image: postgres:15-alpine
+    container_name: voqly_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis Message Broker Service (For Celery background tasks)
+  redis:
+    image: redis:7-alpine
+    container_name: voqly_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # 3. FastAPI Backend Web Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voqly_backend
+    restart: always
+    ports:
+      - "8010:8001"
+    # Inject runtime secrets (Plivo, Gemini, LiveKit, BASE_URL, etc.) from the
+    # root .env. Explicit `environment:` entries below still take precedence.
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/postgres
+      - REDIS_URL=redis://redis:6379/0
+      # Load other environmental variables (Stripe/Razorpay keys) dynamically in production
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-sk_test_placeholder}
+    networks:
+      - default
+      - traefik-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.voqly-api.rule=Host(`voqly.onewebmart.cloud`) && PathPrefix(`/api/`)"
+      - "traefik.http.routers.voqly-api.entrypoints=websecure"
+      - "traefik.http.routers.voqly-api.tls=true"
+      - "traefik.http.routers.voqly-api.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.voqly-api.loadbalancer.server.port=8001"
+      - "traefik.docker.network=traefik-network"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # 4. Celery Background Worker Service (Uses same build context as backend)
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voqly_celery_worker
+    restart: always
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/postgres
+      - REDIS_URL=redis://redis:6379/0
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-sk_test_placeholder}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      backend:
+        condition: service_started
+
+  # 5. Next.js Frontend Web Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=https://voqly.onewebmart.cloud/api/v1
+        - NEXT_PUBLIC_FIREBASE_API_KEY=${NEXT_PUBLIC_FIREBASE_API_KEY}
+        - NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=${NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN}
+        - NEXT_PUBLIC_FIREBASE_PROJECT_ID=${NEXT_PUBLIC_FIREBASE_PROJECT_ID}
+        - NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=${NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET}
+        - NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=${NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID}
+        - NEXT_PUBLIC_FIREBASE_APP_ID=${NEXT_PUBLIC_FIREBASE_APP_ID}
+        - NEXT_PUBLIC_GROQ_API_KEY=${NEXT_PUBLIC_GROQ_API_KEY}
+    container_name: voqly_frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    networks:
+      - default
+      - traefik-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.voqly-frontend.rule=Host(`voqly.onewebmart.cloud`)"
+      - "traefik.http.routers.voqly-frontend.entrypoints=websecure"
+      - "traefik.http.routers.voqly-frontend.tls=true"
+      - "traefik.http.routers.voqly-frontend.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.voqly-frontend.loadbalancer.server.port=3000"
+      - "traefik.docker.network=traefik-network"
+    depends_on:
+      - backend
+
+networks:
+  traefik-network:
+    external: true
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
