@@ -4562,13 +4562,80 @@ async def upload_leads_database(
             parsed_files_data.append(("google_sheet.csv", rows, None, None))
 
         else:
-            if not files:
-                raise HTTPException(status_code=400, detail="At least one database file is required.")
+            downloaded_files = []
+            if files and any(f.filename for f in files):
+                for file in files:
+                    if not file.filename:
+                        continue
+                    content = await file.read()
+                    downloaded_files.append((file.filename, content))
+            elif google_sheet_url:
+                # Download file from URL
+                import urllib.request as _ur
+                import ssl
+                import re
+                
+                download_url = google_sheet_url
+                
+                # Check if it's a Google Sheets link and format is csv/excel
+                if "docs.google.com/spreadsheets" in download_url:
+                    if "/spreadsheets/d/e/" in download_url:
+                        match = re.search(r"/spreadsheets/d/e/([a-zA-Z0-9-_]+)", download_url)
+                        if match:
+                            publish_key = match.group(1)
+                            output_fmt = "csv" if format == "csv" else "xlsx"
+                            download_url = f"https://docs.google.com/spreadsheets/d/e/{publish_key}/pub?output={output_fmt}"
+                            gid_match = re.search(r"[#&?]gid=([0-9]+)", google_sheet_url)
+                            if gid_match:
+                                download_url += f"&single=true&gid={gid_match.group(1)}"
+                    else:
+                        match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", download_url)
+                        if match:
+                            spreadsheet_id = match.group(1)
+                            output_fmt = "csv" if format == "csv" else "xlsx"
+                            download_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format={output_fmt}"
+                            gid_match = re.search(r"[#&?]gid=([0-9]+)", google_sheet_url)
+                            if gid_match:
+                                download_url += f"&gid={gid_match.group(1)}"
+                
+                context = ssl._create_unverified_context()
+                req = _ur.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
+                try:
+                    with _ur.urlopen(req, context=context, timeout=15) as resp:
+                        content = resp.read()
+                        
+                        # Try to extract filename from content-disposition header or URL
+                        filename = "database"
+                        cd_header = resp.headers.get("Content-Disposition")
+                        if cd_header:
+                            fn_match = re.search(r'filename="?([^"]+)"?', cd_header)
+                            if fn_match:
+                                filename = fn_match.group(1)
+                        if filename == "database":
+                            url_path = os.path.basename(google_sheet_url.split("?")[0])
+                            if url_path:
+                                filename = url_path
+                                
+                        # Ensure filename extension matches format
+                        if format == "csv" and not filename.endswith(".csv"):
+                            filename += ".csv"
+                        elif format == "excel" and not filename.endswith((".xlsx", ".xls")):
+                            filename += ".xlsx"
+                        elif format == "sqlite" and not filename.endswith(".db"):
+                            filename += ".db"
+                        elif format == "json" and not filename.endswith(".json"):
+                            filename += ".json"
+                            
+                        downloaded_files.append((filename, content))
+                except Exception as fetch_err:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Failed to download database file from link: {str(fetch_err)}"
+                    )
+            else:
+                raise HTTPException(status_code=400, detail="At least one database file or a link is required.")
             
-            for file in files:
-                if not file.filename:
-                    continue
-                content = await file.read()
+            for filename, content in downloaded_files:
                 rows = []
                 
                 if format == "csv":
@@ -4611,11 +4678,11 @@ async def upload_leads_database(
                     pass
                 elif format == "pdf_docx":
                     from app.services.document_parser import extract_text_from_bytes
-                    txt_content = extract_text_from_bytes(file.filename, content)
-                    parsed_files_data.append((file.filename, [], content, txt_content))
+                    txt_content = extract_text_from_bytes(filename, content)
+                    parsed_files_data.append((filename, [], content, txt_content))
                     continue
 
-                parsed_files_data.append((file.filename, rows, content if format == "sqlite" else None, None))
+                parsed_files_data.append((filename, rows, content if format == "sqlite" else None, None))
 
     except HTTPException as http_ex:
         raise http_ex

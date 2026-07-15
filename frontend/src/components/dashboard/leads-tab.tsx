@@ -158,6 +158,7 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
   const [googleSheetUrl, setGoogleSheetUrl] = useState("");
   const [showUploadUI, setShowUploadUI] = useState(false);
   const [formatDropdownOpen, setFormatDropdownOpen] = useState(false);
+  const [dbImportMode, setDbImportMode] = useState<"upload" | "link">("link");
 
   const checkExistingDatabase = async (cat: string, sub: string) => {
     setCheckingDb(true);
@@ -233,6 +234,7 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
       setExistingDbFiles([]);
       setSelectedDbFormat("google_sheet");
       setGoogleSheetUrl("");
+      setDbImportMode("link");
       setShowUploadUI(false);
       setFormatDropdownOpen(false);
     }
@@ -338,13 +340,31 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
 
           // Headers are the first row
           const headers = jsonData[0].map((h: any) => String(h ?? "").trim().toLowerCase());
-          const nameIdx = headers.findIndex(h => h.includes("name") || h.includes("customer"));
-          const phoneIdx = headers.findIndex(h => h.includes("phone") || h.includes("num") || h.includes("tel"));
+          const nameIdx = headers.findIndex(h => 
+            h.includes("name") || 
+            h.includes("customer") || 
+            h.includes("client") || 
+            h.includes("lead") || 
+            h.includes("person") ||
+            h.includes("first") ||
+            h.includes("last") ||
+            h.includes("contact")
+          );
+          const phoneIdx = headers.findIndex((h, idx) => 
+            h.includes("phone") || 
+            h.includes("number") || 
+            h.includes("num") || 
+            h.includes("tel") || 
+            h.includes("mobile") || 
+            h.includes("cell") || 
+            h.includes("call") ||
+            (h.includes("contact") && idx !== nameIdx)
+          );
           const statusIdx = headers.findIndex(h => h.includes("status"));
           const emailIdx = headers.findIndex(h => h.includes("email") || h.includes("mail"));
 
           if (nameIdx === -1 || phoneIdx === -1) {
-            throw new Error("Failed to find customer name and number columns. Please re-upload a proper Excel/CSV file with clear 'Customer Name' and 'Phone Number' headers.");
+            throw new Error("Failed to find customer name and number columns. Please re-upload a proper Excel/CSV file with clear Name and Phone Number headers.");
           }
 
           const mapped: any[] = [];
@@ -383,14 +403,44 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
             }
 
             const mapped = parsed.map((item: any) => {
-              const name = item.name || item.fullName || item["Full Name"] || item["Customer Name"] || item.customerName || "";
-              const phone_number = item.phone_number || item.phone || item.phoneNumber || item["Phone Number"] || item["Phone"] || item.number || item["Number"] || "";
-              const email = item.email || item.Email || item["Email"] || item["Email Address"] || item.mail || "";
-              const status = (item.status || "PENDING").toUpperCase();
+              const itemKeys = Object.keys(item);
+              const normalizedKeys = itemKeys.map(k => k.trim().toLowerCase());
+              
+              const nameKeyIdx = normalizedKeys.findIndex(k => 
+                k.includes("name") || 
+                k.includes("customer") || 
+                k.includes("client") || 
+                k.includes("lead") || 
+                k.includes("person") ||
+                k.includes("first") ||
+                k.includes("last") ||
+                k.includes("contact")
+              );
+              
+              const phoneKeyIdx = normalizedKeys.findIndex((k, idx) => 
+                k.includes("phone") || 
+                k.includes("number") || 
+                k.includes("num") || 
+                k.includes("tel") || 
+                k.includes("mobile") || 
+                k.includes("cell") || 
+                k.includes("call") ||
+                (k.includes("contact") && idx !== nameKeyIdx)
+              );
+              
+              const name = nameKeyIdx !== -1 ? String(item[itemKeys[nameKeyIdx]] ?? "").trim() : "";
+              const phone_number = phoneKeyIdx !== -1 ? formatPhone(item[itemKeys[phoneKeyIdx]]).trim() : "";
+              
+              const emailKeyIdx = normalizedKeys.findIndex(k => k.includes("email") || k.includes("mail"));
+              const email = emailKeyIdx !== -1 ? String(item[itemKeys[emailKeyIdx]] ?? "").trim() : "";
+              
+              const statusKeyIdx = normalizedKeys.findIndex(k => k.includes("status"));
+              const status = (statusKeyIdx !== -1 && item[itemKeys[statusKeyIdx]] ? String(item[itemKeys[statusKeyIdx]]).trim() : "PENDING").toUpperCase();
+              
               const campaign = baseName;
 
               if (!name || !phone_number) {
-                throw new Error("Failed to find customer name and number columns. Please ensure all JSON objects contain 'name' and 'phone' fields.");
+                throw new Error("Failed to find customer name and number columns in JSON object. Please ensure all objects contain client/name and phone/number properties.");
               }
 
               return { name, phone_number, email, status, campaign };
@@ -404,13 +454,31 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
             }
 
             const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/["']/g, ""));
-            const nameIdx = headers.findIndex(h => h.includes("name") || h.includes("customer"));
-            const phoneIdx = headers.findIndex(h => h.includes("phone") || h.includes("num") || h.includes("tel"));
+            const nameIdx = headers.findIndex(h => 
+              h.includes("name") || 
+              h.includes("customer") || 
+              h.includes("client") || 
+              h.includes("lead") || 
+              h.includes("person") ||
+              h.includes("first") ||
+              h.includes("last") ||
+              h.includes("contact")
+            );
+            const phoneIdx = headers.findIndex((h, idx) => 
+              h.includes("phone") || 
+              h.includes("number") || 
+              h.includes("num") || 
+              h.includes("tel") || 
+              h.includes("mobile") || 
+              h.includes("cell") || 
+              h.includes("call") ||
+              (h.includes("contact") && idx !== nameIdx)
+            );
             const statusIdx = headers.findIndex(h => h.includes("status"));
             const emailIdx = headers.findIndex(h => h.includes("email") || h.includes("mail"));
 
             if (nameIdx === -1 || phoneIdx === -1) {
-              throw new Error("Failed to find customer name and number columns. Please re-upload a proper Excel/CSV file with clear 'Customer Name' and 'Phone Number' headers to ensure the AI agent can fetch names and numbers during calls.");
+              throw new Error("Failed to find customer name and number columns. Please re-upload a proper Excel/CSV file with clear Name and Phone Number headers.");
             }
 
             const mapped: any[] = [];
@@ -487,9 +555,9 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
   };
 
   const handleDbFilesUpload = async () => {
-    if (selectedDbFormat === "google_sheet") {
+    if (dbImportMode === "link") {
       if (!googleSheetUrl.trim()) {
-        setImportError("Please enter a Google Sheet URL.");
+        setImportError(selectedDbFormat === "google_sheet" ? "Please enter a Google Sheet URL." : "Please enter a database file link.");
         return;
       }
     } else {
@@ -513,7 +581,7 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
     formData.append("category", importCategory);
     formData.append("subcategory", importSubcategory);
     formData.append("format", selectedDbFormat);
-    if (selectedDbFormat === "google_sheet") {
+    if (dbImportMode === "link") {
       formData.append("google_sheet_url", googleSheetUrl.trim());
     } else {
       dbFiles.forEach((file) => {
@@ -1109,6 +1177,7 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                 setImportSubcategory("");
                 setDbFiles([]);
                 setDbUploaded(false);
+                setDbImportMode("link");
               }}
               className="absolute top-6 right-6 p-1.5 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded-lg cursor-pointer transition-all"
             >
@@ -1326,6 +1395,7 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                                           setSelectedDbFormat(opt.value);
                                           setDbFiles([]);
                                           setFormatDropdownOpen(false);
+                                          setDbImportMode(opt.value === "google_sheet" ? "link" : "upload");
                                         }}
                                         className={`w-full h-11 px-4 flex items-center justify-between text-xs font-semibold transition-colors cursor-pointer ${isSelected ? "bg-slate-50 text-blue-600 font-bold" : "text-slate-700 hover:bg-slate-50/70"
                                           }`}
@@ -1375,74 +1445,124 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                           <span className="text-xs font-bold text-slate-900 block">Processing Database</span>
                           <span className="text-[10px] text-slate-500 font-semibold">{dbUploadStage || "Please wait..."}</span>
                         </div>
-                      ) : selectedDbFormat === "google_sheet" ? (
-                        <div className="space-y-3 text-left bg-slate-50 border border-slate-250 rounded-xl p-4.5 select-none">
-                          <label className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider block">
-                            Google Sheet Share Link
-                          </label>
-                          <input
-                            type="url"
-                            placeholder="https://docs.google.com/spreadsheets/d/.../edit?usp=sharing"
-                            value={googleSheetUrl}
-                            onChange={(e) => setGoogleSheetUrl(e.target.value)}
-                            className="w-full h-10 px-3 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 transition-all shadow-3xs"
-                          />
-                          <p className="text-[9px] text-slate-400 font-semibold leading-relaxed mt-1">
-                            Important: Ensure the Google Sheet is shared with <strong>&quot;Anyone with the link can view&quot;</strong> so our backend can access it.
-                          </p>
-                        </div>
                       ) : (
                         <>
-                          <div className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-xl p-6 text-center transition-all bg-slate-50/50 relative">
-                            <input
-                              type="file"
-                              multiple={selectedDbFormat !== "sqlite"}
-                              accept={
-                                selectedDbFormat === "sqlite" ? ".db" :
-                                  selectedDbFormat === "csv" ? ".csv" :
-                                    selectedDbFormat === "excel" ? ".xlsx" :
-                                      selectedDbFormat === "json" ? ".json" :
-                                        selectedDbFormat === "pdf_docx" ? ".pdf,.docx,.txt" : ".db,.csv,.xlsx,.json,.pdf,.docx,.txt"
-                              }
-                              onChange={handleDbFilesChange}
-                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                            />
-                            <FileUp className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-                            <span className="text-xs font-bold text-slate-700 block">
-                              Select or drag database file here
-                            </span>
-                            <span className="text-[10px] text-slate-400 block mt-1">
-                              Supports {selectedDbFormat === "sqlite" ? "SQLite database (.db)" :
-                                selectedDbFormat === "csv" ? "CSV spreadsheet (.csv)" :
-                                  selectedDbFormat === "excel" ? "Excel sheets (.xlsx)" :
-                                    selectedDbFormat === "json" ? "JSON files (.json)" :
-                                      selectedDbFormat === "pdf_docx" ? "PDF, Word, or Text (.pdf, .docx, .txt)" : "files"} format
-                            </span>
-                          </div>
-
-                          {dbFiles.length > 0 && (
-                            <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1 text-left">
-                              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                                Selected Files ({dbFiles.length})
-                              </div>
-                              <div className="space-y-1.5">
-                                {dbFiles.map((file, idx) => (
-                                  <div key={idx} className="flex justify-between items-center p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 animate-fade-in">
-                                    <span className="truncate max-w-[280px]">{file.name}</span>
-                                    <div className="flex items-center space-x-2 text-[10px] text-slate-400 shrink-0">
-                                      <span>{(file.size / 1024).toFixed(1)} KB</span>
-                                      <button
-                                        type="button"
-                                        onClick={() => removeDbFile(idx)}
-                                        className="p-1 text-slate-400 hover:text-red-600 rounded cursor-pointer transition-all"
-                                      >
-                                        <X className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
+                          {selectedDbFormat !== "google_sheet" && (
+                            <div className="flex items-center justify-center p-0.5 bg-slate-100 rounded-xl mb-4 max-w-[240px] mx-auto select-none border border-slate-205/60 shadow-3xs">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDbImportMode("upload");
+                                  setImportError(null);
+                                }}
+                                className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
+                                  dbImportMode === "upload"
+                                    ? "bg-white text-slate-900 shadow-xs border border-slate-200/40"
+                                    : "text-slate-500 hover:text-slate-800"
+                                }`}
+                              >
+                                Upload File
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDbImportMode("link");
+                                  setImportError(null);
+                                }}
+                                className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
+                                  dbImportMode === "link"
+                                    ? "bg-white text-slate-900 shadow-xs border border-slate-200/40"
+                                    : "text-slate-500 hover:text-slate-800"
+                                }`}
+                              >
+                                Provide Link
+                              </button>
                             </div>
+                          )}
+
+                          {dbImportMode === "link" || selectedDbFormat === "google_sheet" ? (
+                            <div className="space-y-3 text-left bg-slate-50 border border-slate-250 rounded-xl p-4.5 select-none animate-fade-in">
+                              <label className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider block">
+                                {selectedDbFormat === "google_sheet" ? "Google Sheet Share Link" : "Database File URL Link"}
+                              </label>
+                              <input
+                                type="url"
+                                placeholder={
+                                  selectedDbFormat === "google_sheet"
+                                    ? "https://docs.google.com/spreadsheets/d/.../edit?usp=sharing"
+                                    : `https://example.com/data.${
+                                        selectedDbFormat === "csv" ? "csv" :
+                                        selectedDbFormat === "excel" ? "xlsx" :
+                                        selectedDbFormat === "sqlite" ? "db" :
+                                        selectedDbFormat === "json" ? "json" : "csv"
+                                      }`
+                                }
+                                value={googleSheetUrl}
+                                onChange={(e) => setGoogleSheetUrl(e.target.value)}
+                                className="w-full h-10 px-3 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 transition-all shadow-3xs"
+                              />
+                              <p className="text-[9px] text-slate-400 font-semibold leading-relaxed mt-1">
+                                {selectedDbFormat === "google_sheet" ? (
+                                  <>Important: Ensure the Google Sheet is shared with <strong>&quot;Anyone with the link can view&quot;</strong> so our backend can access it.</>
+                                ) : (
+                                  <>Important: Ensure the database file link is publicly accessible so our backend can download and index it.</>
+                                )}
+                              </p>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-xl p-6 text-center transition-all bg-slate-50/50 relative">
+                                <input
+                                  type="file"
+                                  multiple={selectedDbFormat !== "sqlite"}
+                                  accept={
+                                    selectedDbFormat === "sqlite" ? ".db" :
+                                      selectedDbFormat === "csv" ? ".csv" :
+                                        selectedDbFormat === "excel" ? ".xlsx" :
+                                          selectedDbFormat === "json" ? ".json" :
+                                            selectedDbFormat === "pdf_docx" ? ".pdf,.docx,.txt" : ".db,.csv,.xlsx,.json,.pdf,.docx,.txt"
+                                  }
+                                  onChange={handleDbFilesChange}
+                                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                />
+                                <FileUp className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                                <span className="text-xs font-bold text-slate-700 block">
+                                  Select or drag database file here
+                                </span>
+                                <span className="text-[10px] text-slate-400 block mt-1">
+                                  Supports {selectedDbFormat === "sqlite" ? "SQLite database (.db)" :
+                                    selectedDbFormat === "csv" ? "CSV spreadsheet (.csv)" :
+                                      selectedDbFormat === "excel" ? "Excel sheets (.xlsx)" :
+                                        selectedDbFormat === "json" ? "JSON files (.json)" :
+                                          selectedDbFormat === "pdf_docx" ? "PDF, Word, or Text (.pdf, .docx, .txt)" : "files"} format
+                                </span>
+                              </div>
+
+                              {dbFiles.length > 0 && (
+                                <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1 text-left">
+                                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                    Selected Files ({dbFiles.length})
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    {dbFiles.map((file, idx) => (
+                                      <div key={idx} className="flex justify-between items-center p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 animate-fade-in">
+                                        <span className="truncate max-w-[280px]">{file.name}</span>
+                                        <div className="flex items-center space-x-2 text-[10px] text-slate-400 shrink-0">
+                                          <span>{(file.size / 1024).toFixed(1)} KB</span>
+                                          <button
+                                            type="button"
+                                            onClick={() => removeDbFile(idx)}
+                                            className="p-1 text-slate-400 hover:text-red-600 rounded cursor-pointer transition-all"
+                                          >
+                                            <X className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </>
                           )}
                         </>
                       )}
@@ -1660,7 +1780,7 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                     disabled={
                       uploadingDb ||
                       ((!dbExists || showUploadUI) && !dbUploaded && (
-                        selectedDbFormat === "google_sheet"
+                        dbImportMode === "link"
                           ? !googleSheetUrl.trim()
                           : dbFiles.length === 0
                       ))
@@ -1668,7 +1788,7 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                     className="h-9 px-4 bg-[#0b1931] hover:bg-slate-950 disabled:opacity-50 text-xs font-bold text-white rounded-lg cursor-pointer transition-all flex items-center justify-center space-x-1.5"
                   >
                     {uploadingDb ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <ChevronRight className="w-4 h-4 text-white" />}
-                    <span>{uploadingDb ? "Processing..." : (dbExists && !showUploadUI) ? "Next" : dbUploaded ? "Next" : "Upload Databases"}</span>
+                    <span>{uploadingDb ? "Processing..." : (dbExists && !showUploadUI) ? "Next" : dbUploaded ? "Next" : dbImportMode === "link" ? "Fetch Database" : "Upload Databases"}</span>
                   </button>
                 )}
 

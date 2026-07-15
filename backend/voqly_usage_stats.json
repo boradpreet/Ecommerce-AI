@@ -1,1 +1,26 @@
-{}
+[
+  {
+    "call_id": 1,
+    "agent_name": "callai",
+    "customer_name": "Preet",
+    "duration_seconds": 102,
+    "prompt_tokens": 7573,
+    "candidates_tokens": 96,
+    "total_tokens": 7669,
+    "gemini_cost_rupees": 1.1278,
+    "total_cost_rupees": 1.1278,
+    "timestamp": "2026-07-15 21:21:04"
+  },
+  {
+    "call_id": 2,
+    "agent_name": "orderaii",
+    "customer_name": "Preet",
+    "duration_seconds": 89,
+    "prompt_tokens": 12281,
+    "candidates_tokens": 191,
+    "total_tokens": 12472,
+    "gemini_cost_rupees": 1.869,
+    "total_cost_rupees": 1.869,
+    "timestamp": "2026-07-15 22:52:53"
+  }
+]
