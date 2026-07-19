@@ -8,8 +8,10 @@ import time
 import datetime
 import xml.sax.saxutils as saxutils
 
+import wave
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, status, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal, get_db
 from app.models.all_models import Call, Lead, Agent, Transcript, PhoneNumber, Team, Campaign
@@ -23,6 +25,102 @@ from app.services.gemini_live import (
 )
 
 router = APIRouter()
+
+
+def _resolve_request_base_url(request) -> str:
+    """Dynamically resolve the public base URL from incoming HTTP request headers (ngrok/proxy-aware)."""
+    headers = getattr(request, "headers", {})
+    host = headers.get("x-forwarded-host") or headers.get("host")
+    scheme = headers.get("x-forwarded-proto") or getattr(getattr(request, "url", None), "scheme", "http") or "http"
+    if host:
+        return f"{scheme}://{host}"
+    return os.getenv("BASE_URL", "http://localhost:5011").rstrip("/")
+
+
+class StreamAudioRecorder:
+    def __init__(self, sample_rate: int = 8000):
+        self.sample_rate = sample_rate
+        self.start_time = None
+        self.customer_timeline = {}  # frame_idx -> 320 bytes PCM
+        self.agent_timeline = {}     # frame_idx -> 320 bytes PCM
+        self.customer_frame_count = 0
+        self.last_agent_frame_idx = -1
+
+    def record_customer_frame(self, pcm_320_bytes: bytes) -> None:
+        if pcm_320_bytes and len(pcm_320_bytes) == 320:
+            if self.start_time is None:
+                self.start_time = time.time()
+            self.customer_timeline[self.customer_frame_count] = pcm_320_bytes
+            self.customer_frame_count += 1
+
+    def record_agent_frame(self, pcm_320_bytes: bytes) -> None:
+        if pcm_320_bytes and len(pcm_320_bytes) == 320:
+            now = time.time()
+            if self.start_time is None:
+                self.start_time = now
+            slot_idx = int((now - self.start_time) / 0.020)
+            if slot_idx <= self.last_agent_frame_idx:
+                slot_idx = self.last_agent_frame_idx + 1
+            self.last_agent_frame_idx = slot_idx
+            self.agent_timeline[slot_idx] = pcm_320_bytes
+
+    def get_wav_bytes(self) -> bytes:
+        if not self.customer_timeline and not self.agent_timeline:
+            return b""
+            
+        max_cust = self.customer_frame_count
+        max_agent = (max(self.agent_timeline.keys()) + 1) if self.agent_timeline else 0
+        total_frames = max(max_cust, max_agent)
+        
+        if total_frames <= 0:
+            return b""
+
+        silence_20ms = b'\x00' * 320
+        cust_full = bytearray()
+        agent_full = bytearray()
+
+        for i in range(total_frames):
+            cust_full.extend(self.customer_timeline.get(i, silence_20ms))
+            agent_full.extend(self.agent_timeline.get(i, silence_20ms))
+
+        # Interleave into 2-channel stereo 16-bit PCM (Left: Customer, Right: Agent)
+        max_len = total_frames * 320
+        stereo_bytes = bytearray(max_len * 2)
+        for i in range(0, max_len, 2):
+            stereo_bytes[i*2 : i*2+2] = cust_full[i : i+2]
+            stereo_bytes[i*2+2 : i*2+4] = agent_full[i : i+2]
+
+        try:
+            return audioop.tomono(bytes(stereo_bytes), 2, 0.5, 0.5)
+        except Exception:
+            return bytes(cust_full)
+
+
+def _save_pcm_to_wav(pcm_bytes: bytes, wav_filepath: str, sample_rate: int = 8000) -> None:
+    try:
+        os.makedirs(os.path.dirname(wav_filepath), exist_ok=True)
+        with wave.open(wav_filepath, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm_bytes)
+    except Exception as e:
+        print(f"[Recording Error] Failed to save WAV file {wav_filepath}: {e}")
+
+
+@router.get("/calls/recordings/{call_id}.wav")
+async def get_local_call_recording(call_id: int):
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    rec_path = os.path.join(base_dir, "static", "recordings", f"{call_id}.wav")
+    if os.path.exists(rec_path):
+        headers = {
+            "ngrok-skip-browser-warning": "true",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Cache-Control": "public, max-age=3600",
+        }
+        return FileResponse(rec_path, media_type="audio/wav", headers=headers)
+    raise HTTPException(status_code=404, detail="Recording audio file not found")
 
 
 def _log_turn(call_id: int, speaker: str, text: str, dialogue_turns: list) -> None:
@@ -436,19 +534,19 @@ async def plivo_answer(
     greeting_text, plivo_lang, plivo_voice = get_personalized_greeting(agent, lead, org_id)
     safe_greeting = saxutils.escape(greeting_text)
 
-    base_url = os.getenv("BASE_URL", "http://localhost:5011").rstrip("/")
+    base_url = _resolve_request_base_url(request)
     ws_host = base_url.replace("http://", "ws://").replace("https://", "wss://")
     stream_url = f"{ws_host}/api/v1/calls/plivo/stream/{call_id}"
     status_callback = f"{base_url}/api/v1/calls/plivo/stream-status?call_id={call_id}"
 
     recording_callback = f"{base_url}/api/v1/calls/plivo/recording?call_id={call_id}"
-    # Plivo requires the WSS URL as element TEXT, not a url="" attribute (attribute is ignored).
+    # Plivo executes Response XML elements sequentially. Placing Stream FIRST ensures WSS connects instantly on call answer.
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Record action="{recording_callback}" callbackUrl="{recording_callback}" callbackMethod="POST" redirect="false" recordSession="true" maxLength="3600" />
     <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000" statusCallbackUrl="{status_callback}" statusCallbackMethod="POST">
         {stream_url}
     </Stream>
+    <Record action="{recording_callback}" callbackUrl="{recording_callback}" callbackMethod="POST" redirect="false" recordSession="true" maxLength="3600" />
 </Response>"""
     print(f"[Plivo Answer] Returning stream URL: {stream_url} for call_id={call_id}")
     return Response(content=xml_content, media_type="application/xml")
@@ -471,8 +569,8 @@ async def plivo_recording_callback(
     except Exception:
         pass
 
-    record_url = form_data.get("RecordUrl")
-    call_uuid = form_data.get("CallUUID")
+    record_url = form_data.get("RecordUrl") or form_data.get("record_url") or form_data.get("url") or form_data.get("RecordingUrl")
+    call_uuid = form_data.get("CallUUID") or form_data.get("call_uuid") or form_data.get("CallSid")
 
     print(f"[Plivo Recording] Received recording callback. call_id={call_id}, UUID={call_uuid}, Url={record_url}")
 
@@ -488,6 +586,44 @@ async def plivo_recording_callback(
         print(f"[Plivo Recording] Updated call {call.id} recording_url to: {record_url}")
 
     # Return empty response
+    return Response(content="<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>", media_type="application/xml")
+
+
+@router.post("/calls/twilio/recording")
+async def twilio_recording_callback(
+    request: Request,
+    call_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Twilio calls this when the call recording completes.
+    We retrieve the RecordingUrl and store it in the database.
+    """
+    form_data = {}
+    try:
+        form = await request.form()
+        form_data = dict(form) if form else {}
+    except Exception:
+        pass
+
+    record_url = form_data.get("RecordingUrl") or form_data.get("RecordUrl") or form_data.get("recording_url")
+    call_sid = form_data.get("CallSid") or form_data.get("CallUUID")
+
+    print(f"[Twilio Recording] Received recording callback. call_id={call_id}, SID={call_sid}, Url={record_url}")
+
+    call = None
+    if call_id:
+        call = db.query(Call).filter(Call.id == call_id).first()
+    if not call and call_sid:
+        call = db.query(Call).filter(Call.provider_call_uuid == call_sid).first()
+
+    if call and record_url:
+        if "twilio.com" in record_url and not record_url.endswith(".mp3") and not record_url.endswith(".wav"):
+            record_url = record_url + ".mp3"
+        call.recording_url = record_url
+        db.commit()
+        print(f"[Twilio Recording] Updated call {call.id} recording_url to: {record_url}")
+
     return Response(content="<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>", media_type="application/xml")
 
 
@@ -603,7 +739,7 @@ async def twilio_answer(
     if not call:
          raise HTTPException(status_code=404, detail="Call record not found.")
 
-    base_url = os.getenv("BASE_URL", "http://localhost:5011").rstrip("/")
+    base_url = _resolve_request_base_url(request)
     ws_host = base_url.replace("http://", "ws://").replace("https://", "wss://")
     stream_url = f"{ws_host}/api/v1/calls/twilio/stream/{call_id}"
 
@@ -726,15 +862,6 @@ async def plivo_stream_websocket(websocket: WebSocket, call_id: int):
         }
     }
 
-    if "2.5" in gemini_model:
-        generation_config["thinkingConfig"] = {
-            "thinkingBudget": 0
-        }
-    elif any(x in gemini_model for x in ("3.0", "3.1", "3.5")):
-        generation_config["thinkingConfig"] = {
-            "thinkingLevel": "MINIMAL"
-        }
-
     setup_message = {
         "setup": {
             "model": gemini_model,
@@ -749,7 +876,7 @@ async def plivo_stream_websocket(websocket: WebSocket, call_id: int):
             "realtimeInputConfig": {
                 "automaticActivityDetection": {
                     "disabled": False,
-                    "startOfSpeechSensitivity": "START_SENSITIVITY_LOW",
+                    "startOfSpeechSensitivity": "START_SENSITIVITY_HIGH",
                     "endOfSpeechSensitivity": "END_SENSITIVITY_HIGH"
                 }
             }
@@ -759,7 +886,20 @@ async def plivo_stream_websocket(websocket: WebSocket, call_id: int):
     try:
         async with websockets.connect(gemini_url, ssl=gemini_ssl_context()) as gemini_ws:
             await gemini_ws.send(json.dumps(setup_message))
-            print(f"[Gemini WebSocket] Session initialized for agent '{agent.name}' with voice '{voice_name}'")
+            # Zero-RTT initial trigger: pipelined immediately after setup to eliminate network round-trip delay
+            trigger_msg = {
+                "clientContent": {
+                    "turns": [
+                        {
+                            "role": "user",
+                            "parts": [{"text": f"Please greet the caller naturally right now by saying: {first_message}"}]
+                        }
+                    ],
+                    "turnComplete": True
+                }
+            }
+            await gemini_ws.send(json.dumps(trigger_msg))
+            print(f"[Gemini WebSocket] Session initialized and initial trigger sent immediately for agent '{agent.name}' with voice '{voice_name}'")
 
             stream_started_event = asyncio.Event()
             stream_started_flag = False
@@ -774,13 +914,14 @@ async def plivo_stream_websocket(websocket: WebSocket, call_id: int):
             current_agent_response = ""
             last_usage_metadata = None
             goodbye_triggered = False
+            audio_recorder = StreamAudioRecorder(sample_rate=8000)
 
             # Outbound audio queue & dedicated playback task for jitter-free 20ms audio pacing
             outbound_audio_queue = asyncio.Queue()
             playback_task = None
 
             async def plivo_playback_loop():
-                nonlocal stream_sid, goodbye_triggered
+                nonlocal stream_sid, goodbye_triggered, audio_recorder
                 start_time = None
                 packets_sent = 0
                 
@@ -789,6 +930,13 @@ async def plivo_stream_websocket(websocket: WebSocket, call_id: int):
                         # Wait for next 160-byte (20ms) packet
                         chunk = await outbound_audio_queue.get()
                         
+                        # Accumulate Agent PCM frame for 2-way recording
+                        try:
+                            pcm_frame = audioop.ulaw2lin(chunk, 2)
+                            audio_recorder.record_agent_frame(pcm_frame)
+                        except Exception:
+                            pass
+
                         if start_time is None:
                             start_time = asyncio.get_event_loop().time()
                             packets_sent = 0
@@ -820,7 +968,8 @@ async def plivo_stream_websocket(websocket: WebSocket, call_id: int):
                             start_time = None
                             packets_sent = 0
                             
-                        if sleep_time > 0:
+                        # Fast telephony buffer fill: send first 25 packets (500ms) without sleep delay
+                        if packets_sent > 25 and sleep_time > 0:
                             await asyncio.sleep(sleep_time)
                 except asyncio.CancelledError:
                     pass
@@ -877,6 +1026,10 @@ async def plivo_stream_websocket(websocket: WebSocket, call_id: int):
                                 print(f"[Plivo Stream] Received {plivo_media_count} media packets for call {call_id}")
                             ulaw_audio = base64.b64decode(payload)
                             pcm_8k = audioop.ulaw2lin(ulaw_audio, 2)
+                            try:
+                                audio_recorder.record_customer_frame(pcm_8k)
+                            except Exception:
+                                pass
                             pcm_16k, plivo_resample_state = audioop.ratecv(
                                 pcm_8k, 2, 1, 8000, 16000, plivo_resample_state
                             )
@@ -918,10 +1071,10 @@ async def plivo_stream_websocket(websocket: WebSocket, call_id: int):
                             # Accumulate resampled audio for Gemini
                             input_accumulator += pcm_16k
 
-                            # Send to Gemini in 100ms chunks (3200 bytes at 16kHz 16-bit PCM)
-                            while len(input_accumulator) >= 3200:
-                                chunk_to_send = input_accumulator[:3200]
-                                input_accumulator = input_accumulator[3200:]
+                            # Send to Gemini in 40ms chunks (1280 bytes at 16kHz 16-bit PCM) for ultra-fast response
+                            while len(input_accumulator) >= 1280:
+                                chunk_to_send = input_accumulator[:1280]
+                                input_accumulator = input_accumulator[1280:]
 
                                 # Select the payload structure based on the model version (3.0, 3.1, 3.5 use audio key, others fallback to mediaChunks)
                                 if any(x in gemini_model for x in ("3.0", "3.1", "3.5")):
@@ -958,21 +1111,7 @@ async def plivo_stream_websocket(websocket: WebSocket, call_id: int):
                         packet = json.loads(message)
 
                         if "setupComplete" in packet:
-                            print(f"[Gemini] Setup complete for call {call_id}. Triggering model to speak first immediately...")
-                            # Trigger the model to speak first by sending an initial user turn instructing it to say the greeting
-                            trigger_msg = {
-                                "clientContent": {
-                                    "turns": [
-                                        {
-                                            "role": "user",
-                                            "parts": [{"text": f"Please start the conversation by saying exactly: {first_message}"}]
-                                        }
-                                    ],
-                                    "turnComplete": True
-                                }
-                            }
-                            await gemini_ws.send(json.dumps(trigger_msg))
-                            print(f"[Gemini] Sent initial trigger to speak first with greeting for call {call_id}")
+                            print(f"[Gemini] Setup complete for call {call_id}. Fast audio streaming active.")
 
                         if packet.get("error"):
                             print(f"[Gemini Error] call={call_id}: {packet.get('error')}")
@@ -1140,6 +1279,17 @@ async def plivo_stream_websocket(websocket: WebSocket, call_id: int):
             if lead:
                 lead.status = "called"
 
+            # Save fail-safe 2-way audio recording (customer + agent mixed conversation)
+            wav_bytes = audio_recorder.get_wav_bytes()
+            if wav_bytes:
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                rec_path = os.path.join(base_dir, "static", "recordings", f"{call_id}.wav")
+                _save_pcm_to_wav(wav_bytes, rec_path, sample_rate=8000)
+                if not call.recording_url:
+                    host_url = _resolve_request_base_url(websocket)
+                    call.recording_url = f"{host_url}/api/v1/calls/recordings/{call_id}.wav"
+                    print(f"[Full 2-Way Local Recording Saved] Call {call_id} recording_url set to: {call.recording_url}")
+
             kb_note = f" Knowledge base docs used: {', '.join(doc_names)}." if doc_names else ""
             from app.services.transcript_analysis import analyze_call_transcript_and_update
             analyze_call_transcript_and_update(call.id, dialogue_turns, db, agent.id)
@@ -1290,15 +1440,6 @@ async def twilio_stream_websocket(websocket: WebSocket, call_id: int):
         }
     }
 
-    if "2.5" in gemini_model:
-        generation_config["thinkingConfig"] = {
-            "thinkingBudget": 0
-        }
-    elif any(x in gemini_model for x in ("3.0", "3.1", "3.5")):
-        generation_config["thinkingConfig"] = {
-            "thinkingLevel": "MINIMAL"
-        }
-
     setup_message = {
         "setup": {
             "model": gemini_model,
@@ -1313,7 +1454,7 @@ async def twilio_stream_websocket(websocket: WebSocket, call_id: int):
             "realtimeInputConfig": {
                 "automaticActivityDetection": {
                     "disabled": False,
-                    "startOfSpeechSensitivity": "START_SENSITIVITY_LOW",
+                    "startOfSpeechSensitivity": "START_SENSITIVITY_HIGH",
                     "endOfSpeechSensitivity": "END_SENSITIVITY_HIGH"
                 }
             }
@@ -1323,7 +1464,20 @@ async def twilio_stream_websocket(websocket: WebSocket, call_id: int):
     try:
         async with websockets.connect(gemini_url, ssl=gemini_ssl_context()) as gemini_ws:
             await gemini_ws.send(json.dumps(setup_message))
-            print(f"[Twilio Gemini WebSocket] Session initialized for agent '{agent.name}' with voice '{voice_name}'")
+            # Zero-RTT initial trigger: pipelined immediately after setup to eliminate network round-trip delay
+            trigger_msg = {
+                "clientContent": {
+                    "turns": [
+                        {
+                            "role": "user",
+                            "parts": [{"text": f"Please greet the caller naturally right now by saying: {first_message}"}]
+                        }
+                    ],
+                    "turnComplete": True
+                }
+            }
+            await gemini_ws.send(json.dumps(trigger_msg))
+            print(f"[Twilio Gemini WebSocket] Session initialized and initial trigger sent immediately for agent '{agent.name}' with voice '{voice_name}'")
 
             stream_started_event = asyncio.Event()
             stream_started_flag = False
@@ -1339,13 +1493,14 @@ async def twilio_stream_websocket(websocket: WebSocket, call_id: int):
             last_usage_metadata = None
             goodbye_triggered = False
             is_agent_speaking = False
+            audio_recorder = StreamAudioRecorder(sample_rate=8000)
 
             # Outbound audio queue & dedicated playback task for jitter-free 20ms audio pacing
             outbound_audio_queue = asyncio.Queue()
             playback_task = None
 
             async def twilio_playback_loop():
-                nonlocal stream_sid, goodbye_triggered, is_agent_speaking
+                nonlocal stream_sid, goodbye_triggered, is_agent_speaking, audio_recorder
                 start_time = None
                 packets_sent = 0
                 
@@ -1355,6 +1510,13 @@ async def twilio_stream_websocket(websocket: WebSocket, call_id: int):
                         chunk = await outbound_audio_queue.get()
                         is_agent_speaking = True
                         
+                        # Accumulate Agent PCM frame for 2-way recording
+                        try:
+                            pcm_frame = audioop.ulaw2lin(chunk, 2)
+                            audio_recorder.record_agent_frame(pcm_frame)
+                        except Exception:
+                            pass
+
                         if start_time is None:
                             start_time = asyncio.get_event_loop().time()
                             packets_sent = 0
@@ -1391,7 +1553,8 @@ async def twilio_stream_websocket(websocket: WebSocket, call_id: int):
                             packets_sent = 0
                             is_agent_speaking = False
                             
-                        if sleep_time > 0:
+                        # Fast telephony buffer fill: send first 25 packets (500ms) without sleep delay
+                        if packets_sent > 25 and sleep_time > 0:
                             await asyncio.sleep(sleep_time)
                 except asyncio.CancelledError:
                     pass
@@ -1449,6 +1612,10 @@ async def twilio_stream_websocket(websocket: WebSocket, call_id: int):
                                 print(f"[Twilio Stream] Received {twilio_media_count} media packets for call {call_id}")
                             ulaw_audio = base64.b64decode(payload)
                             pcm_8k = audioop.ulaw2lin(ulaw_audio, 2)
+                            try:
+                                audio_recorder.record_customer_frame(pcm_8k)
+                            except Exception:
+                                pass
                             pcm_16k, twilio_resample_state = audioop.ratecv(
                                 pcm_8k, 2, 1, 8000, 16000, twilio_resample_state
                             )
@@ -1481,9 +1648,10 @@ async def twilio_stream_websocket(websocket: WebSocket, call_id: int):
 
                             input_accumulator += pcm_16k
 
-                            while len(input_accumulator) >= 3200:
-                                chunk_to_send = input_accumulator[:3200]
-                                input_accumulator = input_accumulator[3200:]
+                            # Send to Gemini in 40ms chunks (1280 bytes at 16kHz 16-bit PCM) for ultra-fast response
+                            while len(input_accumulator) >= 1280:
+                                chunk_to_send = input_accumulator[:1280]
+                                input_accumulator = input_accumulator[1280:]
 
                                 # Select the payload structure based on the model version (3.0, 3.1, 3.5 use audio key, others fallback to mediaChunks)
                                 if any(x in gemini_model for x in ("3.0", "3.1", "3.5")):
@@ -1520,20 +1688,7 @@ async def twilio_stream_websocket(websocket: WebSocket, call_id: int):
                         packet = json.loads(message)
 
                         if "setupComplete" in packet:
-                            print(f"[Twilio Gemini] Setup complete for call {call_id}. Triggering model to speak first immediately...")
-                            trigger_msg = {
-                                "clientContent": {
-                                    "turns": [
-                                        {
-                                            "role": "user",
-                                            "parts": [{"text": f"Please start the conversation by saying exactly: {first_message}"}]
-                                        }
-                                    ],
-                                    "turnComplete": True
-                                }
-                            }
-                            await gemini_ws.send(json.dumps(trigger_msg))
-                            print(f"[Twilio Gemini] Sent initial trigger to speak first for call {call_id}")
+                            print(f"[Twilio Gemini] Setup complete for call {call_id}. Fast audio streaming active.")
 
                         if packet.get("error"):
                             print(f"[Twilio Gemini Error] call={call_id}: {packet.get('error')}")
@@ -1693,6 +1848,17 @@ async def twilio_stream_websocket(websocket: WebSocket, call_id: int):
 
             if lead:
                 lead.status = "called"
+
+            # Save fail-safe 2-way audio recording (customer + agent mixed conversation)
+            wav_bytes = audio_recorder.get_wav_bytes()
+            if wav_bytes:
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                rec_path = os.path.join(base_dir, "static", "recordings", f"{call_id}.wav")
+                _save_pcm_to_wav(wav_bytes, rec_path, sample_rate=8000)
+                if not call.recording_url:
+                    host_url = _resolve_request_base_url(websocket)
+                    call.recording_url = f"{host_url}/api/v1/calls/recordings/{call_id}.wav"
+                    print(f"[Full 2-Way Twilio Local Recording Saved] Call {call_id} recording_url set to: {call.recording_url}")
 
             kb_note = f" Knowledge base docs used: {', '.join(doc_names)}." if doc_names else ""
             from app.services.transcript_analysis import analyze_call_transcript_and_update

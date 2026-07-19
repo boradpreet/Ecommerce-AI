@@ -453,13 +453,17 @@ class CampaignDialer:
             answer_url = f"{normalized_base}/api/v1/calls/twilio/answer?call_id={call_id}"
             status_url = f"{normalized_base}/api/v1/calls/twilio/status?call_id={call_id}"
             
+            recording_url = f"{normalized_base}/api/v1/calls/twilio/recording?call_id={call_id}"
             data = {
                 "From": from_num_clean,
                 "To": to_num_clean,
                 "Url": answer_url,
                 "Method": "POST",
                 "StatusCallback": status_url,
-                "StatusCallbackMethod": "POST"
+                "StatusCallbackMethod": "POST",
+                "Record": "true",
+                "RecordingStatusCallback": recording_url,
+                "RecordingStatusCallbackMethod": "POST"
             }
             
             payload = urllib.parse.urlencode(data).encode("utf-8")
@@ -511,13 +515,17 @@ class CampaignDialer:
             answer_url = f"{normalized_base}/api/v1/calls/plivo/answer?call_id={call_id}"
             status_url = f"{normalized_base}/api/v1/calls/plivo/status?call_id={call_id}"
             
+            recording_url = f"{normalized_base}/api/v1/calls/plivo/recording?call_id={call_id}"
             data = {
                 "from": from_num_clean,
                 "to": to_num_clean,
                 "answer_url": answer_url,
                 "answer_method": "POST",
                 "status_callback_url": status_url,
-                "status_callback_method": "POST"
+                "status_callback_method": "POST",
+                "record": "true",
+                "record_url": recording_url,
+                "record_method": "POST"
             }
             
             payload = urllib.parse.urlencode(data).encode("utf-8")
@@ -650,6 +658,7 @@ class CampaignDialer:
             # 3. Call Completed
             call.status = "completed"
             call.duration_seconds = duration
+            call.recording_url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
             lead.status = "called"
 
             # Create transcript record

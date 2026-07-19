@@ -1119,6 +1119,9 @@ def resolve_ecommerce_greeting(rhea_cust: Optional[dict], lead_name: str, lang: 
         return tpl["marketing"].format(name=db_name)
 
     if not rhea_cust:
+        if lead_name:
+            fallback_fmt = tpl.get("fallback", "Hello {name}.")
+            return fallback_fmt.format(name=lead_name)
         return tpl["mismatch"]
         
     db_name = rhea_cust.get("name") or lead_name
@@ -1306,7 +1309,7 @@ def get_personalized_greeting(agent: Optional[Agent], lead: Optional[Lead], org_
         subcat_lower = (subcategory or "").strip().lower() if subcategory else ""
         is_marketing = "marketing" in subcat_lower or "salles" in subcat_lower or "sales" in subcat_lower
         
-        if is_marketing:
+        if is_marketing or (lead and lead.name):
             name_matches = True
 
         if not name_matches:
@@ -1485,6 +1488,9 @@ def build_call_instructions(
     is_ecommerce = category and "ecommerce" in category.lower()
     subcat_lower = (subcategory or "").strip().lower() if subcategory else ""
     is_marketing = "marketing" in subcat_lower or "salles" in subcat_lower or "sales" in subcat_lower
+    if is_marketing or (lead and lead.name):
+        name_matches = True
+
     if db_exists and not name_matches and is_ecommerce and not is_marketing:
         system_prompt = resolve_mismatch_prompt(agent.lang or "ENGLISH")
 

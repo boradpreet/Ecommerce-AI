@@ -31,18 +31,16 @@ def analyze_call_transcript_and_update(call_id: int, dialogue_turns: list, db: S
         "You are an expert conversational analyst. "
         "Analyze the provided transcript of a phone conversation between an AI Voice Agent and a Customer.\n\n"
         "Tasks:\n"
-        "1. Summarize the call in a short paragraph (2 sentences max). Use the agent's summary guidelines if provided.\n"
+        "1. Write a strict 2-sentence executive summary of the full call.\n"
+        "   - Sentence 1: Summarize what the customer inquired about, stated, or requested during the call.\n"
+        "   - Sentence 2: Summarize the resolution, key information provided by the AI agent, or agreed next steps.\n"
+        "   - Do NOT output generic filler phrases like 'Call completed. Dialogue contains 7 turns.'\n"
         "2. Determine the customer's sentiment (strictly one of: POSITIVE, NEUTRAL, NEGATIVE).\n"
         "3. Evaluate the customer's interest level in the agent's campaign/product/offer as a percentage score out of 100 (from 0 to 100).\n"
-        "   - High interest (e.g. asking for details, showing clear interest, positive responses, agreeing to follow-up) -> 70 to 100\n"
-        "   - Neutral (e.g. brief response, polite but not committed, hanging up without rude remarks) -> 30 to 60\n"
-        "   - Low/No interest (e.g. saying no, not interested, telling not to call, hanging up immediately/abruptly) -> 0 to 20\n"
-        "4. Determine wants_details (true/false): true if the customer asked for more details/information, "
-        "pricing, a brochure/catalog, the company details, or asked to be sent information (by WhatsApp/email/SMS). "
-        "Otherwise false.\n\n"
+        "4. Determine wants_details (true/false): true if the customer asked for more details, pricing, brochure, catalog, or company info to be sent. Otherwise false.\n\n"
         "You MUST return a JSON object with the following keys:\n"
         "{\n"
-        "  \"summary\": \"Short 2-sentence summary here.\",\n"
+        "  \"summary\": \"Sentence one about customer request. Sentence two about agent outcome.\",\n"
         "  \"sentiment\": \"POSITIVE\" | \"NEUTRAL\" | \"NEGATIVE\",\n"
         "  \"interest_percentage\": 85,\n"
         "  \"wants_details\": true\n"
@@ -56,11 +54,6 @@ def analyze_call_transcript_and_update(call_id: int, dialogue_turns: list, db: S
     dialogue_lower = dialogue_text.lower()
     inbound_count = sum(1 for t in dialogue_turns if t.get("speaker") == "customer")
     
-    # Baseline defaults
-    summary = f"Call completed. Dialogue contains {len(dialogue_turns)} turns."
-    sentiment = "neutral"
-    interest_score = 50
-
     # Keyword fallback: did the caller ask for details / info / to be sent something?
     detail_keywords = [
         "details", "detail", "brochure", "catalog", "catalogue", "price list", "pricing",
@@ -70,38 +63,57 @@ def analyze_call_transcript_and_update(call_id: int, dialogue_turns: list, db: S
     ]
     wants_details = any(k in dialogue_lower for k in detail_keywords)
 
-    if inbound_count == 0:
-        summary = "Call answered, but the customer was silent."
+    has_positive = any(w in dialogue_lower for w in ["yes", "interested", "sure", "ok", "okay", "details", "price", "location", "buy", "नमस्ते", "હા", "હાજી", "थैंक यू", "धन्यवाद", "thanks", "thank you"])
+    has_negative = any(w in dialogue_lower for w in ["not interested", "dont call", "don't call", "do not call", "stop calling", "remove my number", "rude", "नहीं चाहिए", "नहीं चाहिये"])
+    is_polite_no = "नहीं" in dialogue_lower and any(w in dialogue_lower for w in ["थैंक यू", "धन्यवाद", "thanks", "thank you"])
+
+    if has_positive and not has_negative:
+        sentiment = "positive"
+        interest_score = 75
+    elif has_negative:
+        sentiment = "negative"
+        interest_score = 15
+    elif is_polite_no:
+        sentiment = "neutral"
+        interest_score = 55
+    else:
+        sentiment = "neutral"
+        interest_score = 50
+
+    # Smart 2-Sentence Summary Fallback
+    cust_speech = [str(t.get("text", "")).strip() for t in dialogue_turns if t.get("speaker") == "customer" and str(t.get("text", "")).strip()]
+    agent_speech = [str(t.get("text", "")).strip() for t in dialogue_turns if t.get("speaker") == "agent" and str(t.get("text", "")).strip()]
+
+    if not cust_speech:
+        summary = "The caller connected but remained silent throughout the interaction. No actionable information was requested or exchanged."
         sentiment = "neutral"
         interest_score = 10
     else:
-        # Check basic words
-        has_positive = any(w in dialogue_lower for w in ["yes", "interested", "sure", "ok", "okay", "details", "price", "location", "buy", "नमस्ते", "હા", "હાજી", "थैंक यू", "धन्यवाद", "thanks", "thank you"])
-        # Only strong, unambiguous phrases — avoids matching short substrings (e.g. bare "ना")
-        # that made almost every call look negative when the AI analyzer was unavailable.
-        has_negative = any(w in dialogue_lower for w in ["not interested", "dont call", "don't call", "do not call", "stop calling", "remove my number", "rude", "नहीं चाहिए", "नहीं चाहिये"])
-        # If they said "no" but also "thanks/thank you", it is a polite decline or completion, not purely negative
-        is_polite_no = "नहीं" in dialogue_lower and any(w in dialogue_lower for w in ["थैंक यू", "धन्यवाद", "thanks", "thank you"])
+        main_cust_point = cust_speech[0]
+        if len(cust_speech) > 1 and len(main_cust_point) < 40:
+            main_cust_point += " " + cust_speech[1]
+        if len(main_cust_point) > 100:
+            main_cust_point = main_cust_point[:97] + "..."
+            
+        s1 = f"The customer inquired regarding: \"{main_cust_point}\"."
         
-        if has_positive and not has_negative:
-            sentiment = "positive"
-            interest_score = 75
+        if wants_details:
+            s2 = "The AI agent provided details and scheduled an automated information dispatch."
         elif has_negative:
-            sentiment = "negative"
-            interest_score = 15
-        elif is_polite_no:
-            sentiment = "neutral"
-            interest_score = 55
+            s2 = "The customer declined the offer and requested no further follow-up."
+        elif len(agent_speech) > 1:
+            s2 = "The AI agent addressed the inquiry and confirmed the conversation details."
         else:
-            sentiment = "neutral"
-            interest_score = 50
+            s2 = "The AI agent provided guidance and closed the call interaction."
+            
+        summary = f"{s1} {s2}"
 
     # 4. Attempt to query Gemini API
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if gemini_key and dialogue_text.strip():
-        # gemini-2.5-flash is quota-exhausted (429) on this key, which forced every call
-        # onto the keyword fallback (constant NEGATIVE/15%). Use the rolling flash alias.
-        analysis_model = os.getenv("GEMINI_ANALYSIS_MODEL", "gemini-flash-latest")
+        analysis_model = os.getenv("GEMINI_ANALYSIS_MODEL", "models/gemini-2.0-flash-exp")
+        if analysis_model.startswith("models/"):
+            analysis_model = analysis_model.replace("models/", "")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{analysis_model}:generateContent?key={gemini_key}"
         body = {
             "contents": [
@@ -116,10 +128,7 @@ def analyze_call_transcript_and_update(call_id: int, dialogue_turns: list, db: S
             "generationConfig": {
                 "temperature": 0.2,
                 "responseMimeType": "application/json",
-                "maxOutputTokens": 1024,
-                "thinkingConfig": {
-                    "thinkingBudget": 0
-                }
+                "maxOutputTokens": 512
             }
         }
         try:
@@ -132,9 +141,17 @@ def analyze_call_transcript_and_update(call_id: int, dialogue_turns: list, db: S
             context = ssl._create_unverified_context()
             with _ur.urlopen(req, context=context, timeout=8) as resp:
                 resp_data = json.loads(resp.read().decode("utf-8"))
-                text_reply = resp_data["candidates"][0]["content"]["parts"][0]["text"]
-                parsed = json.loads(text_reply.strip())
-                summary = parsed.get("summary", summary)
+                text_reply = resp_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if text_reply.startswith("```"):
+                    parts = text_reply.split("```")
+                    if len(parts) >= 2:
+                        text_reply = parts[1]
+                    if text_reply.startswith("json"):
+                        text_reply = text_reply[4:]
+                    text_reply = text_reply.strip()
+                parsed = json.loads(text_reply)
+                if parsed.get("summary"):
+                    summary = parsed.get("summary")
                 sentiment = parsed.get("sentiment", sentiment).lower()
                 interest_score = int(parsed.get("interest_percentage", interest_score))
                 if "wants_details" in parsed:

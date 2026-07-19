@@ -2878,12 +2878,15 @@ def get_call_transcript(call_id: int, current_user: User = Depends(get_current_u
     interest_score = transcript.interest_score
     if interest_score is None:
         interest_score = 0
+    call = db.query(Call).filter(Call.id == call_id).first()
+    recording_url = call.recording_url if call else None
     return {
         "call_id": call_id,
         "dialogue": transcript.dialogue_json or [],
         "summary": transcript.summary,
         "sentiment": transcript.sentiment,
         "interest_score": interest_score,
+        "recording_url": recording_url,
         "wants_details": bool(getattr(transcript, "wants_details", False)),
         "details_sent": bool(getattr(transcript, "details_sent", False)),
         "details_sent_to": getattr(transcript, "details_sent_to", None),

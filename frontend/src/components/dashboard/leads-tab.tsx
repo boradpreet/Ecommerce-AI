@@ -340,23 +340,23 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
 
           // Headers are the first row
           const headers = jsonData[0].map((h: any) => String(h ?? "").trim().toLowerCase());
-          const nameIdx = headers.findIndex(h => 
-            h.includes("name") || 
-            h.includes("customer") || 
-            h.includes("client") || 
-            h.includes("lead") || 
+          const nameIdx = headers.findIndex(h =>
+            h.includes("name") ||
+            h.includes("customer") ||
+            h.includes("client") ||
+            h.includes("lead") ||
             h.includes("person") ||
             h.includes("first") ||
             h.includes("last") ||
             h.includes("contact")
           );
-          const phoneIdx = headers.findIndex((h, idx) => 
-            h.includes("phone") || 
-            h.includes("number") || 
-            h.includes("num") || 
-            h.includes("tel") || 
-            h.includes("mobile") || 
-            h.includes("cell") || 
+          const phoneIdx = headers.findIndex((h, idx) =>
+            h.includes("phone") ||
+            h.includes("number") ||
+            h.includes("num") ||
+            h.includes("tel") ||
+            h.includes("mobile") ||
+            h.includes("cell") ||
             h.includes("call") ||
             (h.includes("contact") && idx !== nameIdx)
           );
@@ -405,38 +405,38 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
             const mapped = parsed.map((item: any) => {
               const itemKeys = Object.keys(item);
               const normalizedKeys = itemKeys.map(k => k.trim().toLowerCase());
-              
-              const nameKeyIdx = normalizedKeys.findIndex(k => 
-                k.includes("name") || 
-                k.includes("customer") || 
-                k.includes("client") || 
-                k.includes("lead") || 
+
+              const nameKeyIdx = normalizedKeys.findIndex(k =>
+                k.includes("name") ||
+                k.includes("customer") ||
+                k.includes("client") ||
+                k.includes("lead") ||
                 k.includes("person") ||
                 k.includes("first") ||
                 k.includes("last") ||
                 k.includes("contact")
               );
-              
-              const phoneKeyIdx = normalizedKeys.findIndex((k, idx) => 
-                k.includes("phone") || 
-                k.includes("number") || 
-                k.includes("num") || 
-                k.includes("tel") || 
-                k.includes("mobile") || 
-                k.includes("cell") || 
+
+              const phoneKeyIdx = normalizedKeys.findIndex((k, idx) =>
+                k.includes("phone") ||
+                k.includes("number") ||
+                k.includes("num") ||
+                k.includes("tel") ||
+                k.includes("mobile") ||
+                k.includes("cell") ||
                 k.includes("call") ||
                 (k.includes("contact") && idx !== nameKeyIdx)
               );
-              
+
               const name = nameKeyIdx !== -1 ? String(item[itemKeys[nameKeyIdx]] ?? "").trim() : "";
               const phone_number = phoneKeyIdx !== -1 ? formatPhone(item[itemKeys[phoneKeyIdx]]).trim() : "";
-              
+
               const emailKeyIdx = normalizedKeys.findIndex(k => k.includes("email") || k.includes("mail"));
               const email = emailKeyIdx !== -1 ? String(item[itemKeys[emailKeyIdx]] ?? "").trim() : "";
-              
+
               const statusKeyIdx = normalizedKeys.findIndex(k => k.includes("status"));
               const status = (statusKeyIdx !== -1 && item[itemKeys[statusKeyIdx]] ? String(item[itemKeys[statusKeyIdx]]).trim() : "PENDING").toUpperCase();
-              
+
               const campaign = baseName;
 
               if (!name || !phone_number) {
@@ -454,23 +454,23 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
             }
 
             const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/["']/g, ""));
-            const nameIdx = headers.findIndex(h => 
-              h.includes("name") || 
-              h.includes("customer") || 
-              h.includes("client") || 
-              h.includes("lead") || 
+            const nameIdx = headers.findIndex(h =>
+              h.includes("name") ||
+              h.includes("customer") ||
+              h.includes("client") ||
+              h.includes("lead") ||
               h.includes("person") ||
               h.includes("first") ||
               h.includes("last") ||
               h.includes("contact")
             );
-            const phoneIdx = headers.findIndex((h, idx) => 
-              h.includes("phone") || 
-              h.includes("number") || 
-              h.includes("num") || 
-              h.includes("tel") || 
-              h.includes("mobile") || 
-              h.includes("cell") || 
+            const phoneIdx = headers.findIndex((h, idx) =>
+              h.includes("phone") ||
+              h.includes("number") ||
+              h.includes("num") ||
+              h.includes("tel") ||
+              h.includes("mobile") ||
+              h.includes("cell") ||
               h.includes("call") ||
               (h.includes("contact") && idx !== nameIdx)
             );
@@ -780,12 +780,14 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
             </div>
             <FilterMenu
               align="left"
-              groups={[{ key: "status", label: "List status", options: [
-                { value: "all", label: "All" },
-                { value: "pending", label: "Has pending" },
-                { value: "called", label: "Fully called" },
-                { value: "dnc", label: "Has DNC" },
-              ] }]}
+              groups={[{
+                key: "status", label: "List status", options: [
+                  { value: "all", label: "All" },
+                  { value: "pending", label: "Has pending" },
+                  { value: "called", label: "Fully called" },
+                  { value: "dnc", label: "Has DNC" },
+                ]
+              }]}
               value={leadFilters}
               onChange={(k, v) => setLeadFilters((prev) => ({ ...prev, [k]: v }))}
               onClear={() => setLeadFilters({ status: "all" })}
@@ -1312,11 +1314,10 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                         </div>
                         {dbProcessing && (
                           <div className="text-[10px] font-bold max-w-xs mx-auto space-y-1">
-                            <span className={`inline-block px-2 py-0.5 rounded uppercase tracking-wide ${
-                              dbProcessing.index_status === "ready" || dbProcessing.status === "ready"
+                            <span className={`inline-block px-2 py-0.5 rounded uppercase tracking-wide ${dbProcessing.index_status === "ready" || dbProcessing.status === "ready"
                                 ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                                 : "bg-amber-50 text-amber-700 border border-amber-200"
-                            }`}>
+                              }`}>
                               {dbProcessing.index_status === "ready" || dbProcessing.status === "ready"
                                 ? `Indexed · ${dbProcessing.row_count || 0} rows · ${dbProcessing.vector_chunks || 0} vector chunks`
                                 : "Processing / pending index"}
@@ -1455,11 +1456,10 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                                   setDbImportMode("upload");
                                   setImportError(null);
                                 }}
-                                className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
-                                  dbImportMode === "upload"
+                                className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${dbImportMode === "upload"
                                     ? "bg-white text-slate-900 shadow-xs border border-slate-200/40"
                                     : "text-slate-500 hover:text-slate-800"
-                                }`}
+                                  }`}
                               >
                                 Upload File
                               </button>
@@ -1469,11 +1469,10 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                                   setDbImportMode("link");
                                   setImportError(null);
                                 }}
-                                className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
-                                  dbImportMode === "link"
+                                className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${dbImportMode === "link"
                                     ? "bg-white text-slate-900 shadow-xs border border-slate-200/40"
                                     : "text-slate-500 hover:text-slate-800"
-                                }`}
+                                  }`}
                               >
                                 Provide Link
                               </button>
@@ -1490,12 +1489,11 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                                 placeholder={
                                   selectedDbFormat === "google_sheet"
                                     ? "https://docs.google.com/spreadsheets/d/.../edit?usp=sharing"
-                                    : `https://example.com/data.${
-                                        selectedDbFormat === "csv" ? "csv" :
-                                        selectedDbFormat === "excel" ? "xlsx" :
+                                    : `https://example.com/data.${selectedDbFormat === "csv" ? "csv" :
+                                      selectedDbFormat === "excel" ? "xlsx" :
                                         selectedDbFormat === "sqlite" ? "db" :
-                                        selectedDbFormat === "json" ? "json" : "csv"
-                                      }`
+                                          selectedDbFormat === "json" ? "json" : "csv"
+                                    }`
                                 }
                                 value={googleSheetUrl}
                                 onChange={(e) => setGoogleSheetUrl(e.target.value)}
@@ -1623,8 +1621,8 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                     const isCountryCodeSelected = defaultCountryCode !== "";
                     return (
                       <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-all relative ${isCountryCodeSelected
-                          ? "border-slate-200 hover:border-blue-400 bg-slate-50/50 cursor-pointer"
-                          : "border-slate-150 bg-slate-50/30 opacity-60 pointer-events-none"
+                        ? "border-slate-200 hover:border-blue-400 bg-slate-50/50 cursor-pointer"
+                        : "border-slate-150 bg-slate-50/30 opacity-60 pointer-events-none"
                         }`}>
                         <input
                           type="file"

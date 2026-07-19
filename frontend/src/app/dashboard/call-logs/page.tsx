@@ -13,6 +13,19 @@ function escapeHtml(s: string): string {
   return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function resolveRecordingUrl(rawUrl?: string | null): string {
+  if (!rawUrl) return "";
+  const url = rawUrl.trim();
+  if (typeof window !== "undefined") {
+    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    if (isLocal && url.includes("/api/v1/calls/recordings/")) {
+      const pathIndex = url.indexOf("/api/v1/calls/recordings/");
+      return `http://localhost:5011${url.substring(pathIndex)}`;
+    }
+  }
+  return url;
+}
+
 interface CallLog {
   id: number;
   lead_name: string;
@@ -45,6 +58,7 @@ interface TranscriptResponse {
   summary?: string;
   sentiment?: string;
   interest_score?: number;
+  recording_url?: string;
   wants_details?: boolean;
   details_sent?: boolean;
   details_sent_to?: string | null;
@@ -192,11 +206,12 @@ export default function DashboardCallLogsPage() {
   };
 
   const downloadRecording = async (call: CallLog) => {
-    if (!call.recording_url) return;
+    const recUrl = resolveRecordingUrl(call.recording_url);
+    if (!recUrl) return;
     const safe = (call.lead_name || "call").replace(/[^a-z0-9]+/gi, "_").toLowerCase();
-    const filename = `voqly_recording_${safe}_${call.id}.mp3`;
+    const filename = `voqly_recording_${safe}_${call.id}.wav`;
     try {
-      const res = await fetch(call.recording_url);
+      const res = await fetch(recUrl);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -206,7 +221,7 @@ export default function DashboardCallLogsPage() {
     } catch {
       // Fallback for CORS-friendly / same-origin hosts
       const a = document.createElement("a");
-      a.href = call.recording_url; a.download = filename;
+      a.href = recUrl; a.download = filename;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
     }
   };
@@ -601,7 +616,7 @@ ${rows || "<p>No dialogue recorded.</p>"}
                       )}
 
                       {/* Stored Call Voice Recording Playback */}
-                      {selectedCall?.recording_url && (
+                      {(selectedCallTranscript?.recording_url || selectedCall?.recording_url) && (
                         <div className="pt-1.5 space-y-2">
                           <div className="flex items-center gap-1.5 text-[10px] font-extrabold text-slate-450 uppercase tracking-wider">
                             <span>🎙️</span>
@@ -610,11 +625,17 @@ ${rows || "<p>No dialogue recorded.</p>"}
                           <div className="bg-slate-50/80 border border-slate-100 p-3 rounded-xl flex items-center justify-between gap-4">
                             <audio 
                               controls 
-                              src={selectedCall.recording_url} 
+                              src={resolveRecordingUrl(selectedCallTranscript?.recording_url || selectedCall?.recording_url)} 
                               className="flex-1 h-9 rounded-lg"
                             />
                             <button
-                              onClick={() => downloadRecording(selectedCall)}
+                              onClick={() => {
+                                const rawRec = selectedCallTranscript?.recording_url || selectedCall?.recording_url;
+                                const recUrl = resolveRecordingUrl(rawRec);
+                                if (selectedCall && recUrl) {
+                                  downloadRecording({ ...selectedCall, recording_url: recUrl });
+                                }
+                              }}
                               className="h-9 px-4 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-lg transition-colors flex items-center justify-center shrink-0 shadow-sm cursor-pointer"
                             >
                               Download Audio
