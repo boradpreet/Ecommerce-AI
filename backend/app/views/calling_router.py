@@ -200,6 +200,22 @@ def _ends_with_goodbye(normalized: str) -> bool:
     return False
 
 
+def _is_voicemail_phrase(text: str) -> bool:
+    if not text:
+        return False
+    t_lower = text.lower()
+    keywords = [
+        "voicemail", "voice mail", "leave a message", "after the tone", "after the beep",
+        "trying to reach is not available", "forwarded to voicemail", "forwarded to voice mail",
+        "subscriber is currently busy", "switched off", "out of coverage", "unreachable",
+        "not available to take your call", "party you are calling", "leave your message",
+        "at the tone", "please try again later", "busy right now", "call is being forwarded",
+        "record your message", "message after the", "forwarded to an automated",
+        "उत्तर नहीं", "व्यस्त", "स्विच ऑफ", "પોહચ બહાર", "બીઝી", "ઉત્તર નથી"
+    ]
+    return any(k in t_lower for k in keywords)
+
+
 def _is_goodbye_phrase(text: str) -> bool:
     if not text:
         return False
@@ -1159,6 +1175,24 @@ async def plivo_stream_websocket(websocket: WebSocket, call_id: int):
                             customer_text = input_tx["text"]
                             _log_turn(call_id, "customer", customer_text, dialogue_turns)
                             
+                            # Instant Hangup on Carrier Voicemail / Answering Machine
+                            if _is_voicemail_phrase(customer_text):
+                                print(f"[Voicemail Instant Hangup] Carrier voicemail detected: '{customer_text}'. Cutting call {call_id} immediately!")
+                                goodbye_triggered = True
+                                try:
+                                    await websocket.send_text(json.dumps({"event": "clearAudio"}))
+                                except Exception:
+                                    pass
+                                while not outbound_audio_queue.empty():
+                                    try:
+                                        outbound_audio_queue.get_nowait()
+                                    except asyncio.QueueEmpty:
+                                        break
+                                provider_call_uuid = getattr(call, "provider_call_uuid", None)
+                                if provider_call_uuid:
+                                    hangup_plivo_call(provider_call_uuid)
+                                raise WebSocketDisconnect("Voicemail greeting detected — direct hangup")
+
                             # Check for goodbye/bye phrases to hang up immediately
                             if (
                                 _is_goodbye_phrase(customer_text)
@@ -1732,6 +1766,24 @@ async def twilio_stream_websocket(websocket: WebSocket, call_id: int):
                             customer_text = input_tx["text"]
                             _log_turn(call_id, "customer", customer_text, dialogue_turns)
                             
+                            # Instant Hangup on Carrier Voicemail / Answering Machine
+                            if _is_voicemail_phrase(customer_text):
+                                print(f"[Twilio Voicemail Instant Hangup] Carrier voicemail detected: '{customer_text}'. Cutting call {call_id} immediately!")
+                                goodbye_triggered = True
+                                try:
+                                    await websocket.send_text(json.dumps({"event": "clear"}))
+                                except Exception:
+                                    pass
+                                while not outbound_audio_queue.empty():
+                                    try:
+                                        outbound_audio_queue.get_nowait()
+                                    except asyncio.QueueEmpty:
+                                        break
+                                provider_call_uuid = getattr(call, "provider_call_uuid", None)
+                                if provider_call_uuid:
+                                    hangup_twilio_call(provider_call_uuid)
+                                raise WebSocketDisconnect("Voicemail greeting detected — direct hangup")
+
                             if (
                                 _is_goodbye_phrase(customer_text)
                                 and _should_allow_goodbye_hangup(call.created_at, dialogue_turns)

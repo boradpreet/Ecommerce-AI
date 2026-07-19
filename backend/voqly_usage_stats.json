@@ -130,5 +130,41 @@
     "gemini_cost_rupees": 1.2591,
     "total_cost_rupees": 1.2591,
     "timestamp": "2026-07-19 10:32:17"
+  },
+  {
+    "call_id": 12,
+    "agent_name": "callai",
+    "customer_name": "chintan",
+    "duration_seconds": 32,
+    "prompt_tokens": 4736,
+    "candidates_tokens": 124,
+    "total_tokens": 4860,
+    "gemini_cost_rupees": 0.7775,
+    "total_cost_rupees": 0.7775,
+    "timestamp": "2026-07-19 10:51:10"
+  },
+  {
+    "call_id": 13,
+    "agent_name": "callai",
+    "customer_name": "chintan",
+    "duration_seconds": 10,
+    "prompt_tokens": 0,
+    "candidates_tokens": 0,
+    "total_tokens": 0,
+    "gemini_cost_rupees": 0.0,
+    "total_cost_rupees": 0.0,
+    "timestamp": "2026-07-19 10:58:35"
+  },
+  {
+    "call_id": 14,
+    "agent_name": "callai",
+    "customer_name": "chintan",
+    "duration_seconds": 60,
+    "prompt_tokens": 6067,
+    "candidates_tokens": 38,
+    "total_tokens": 6105,
+    "gemini_cost_rupees": 0.8598,
+    "total_cost_rupees": 0.8598,
+    "timestamp": "2026-07-19 11:11:27"
   }
 ]

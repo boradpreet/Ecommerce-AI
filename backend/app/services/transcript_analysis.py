@@ -75,16 +75,29 @@ def analyze_call_transcript_and_update(call_id: int, dialogue_turns: list, db: S
         interest_score = 15
     elif is_polite_no:
         sentiment = "neutral"
-        interest_score = 55
     else:
         sentiment = "neutral"
         interest_score = 50
 
-    # Smart 2-Sentence Summary Fallback
     cust_speech = [str(t.get("text", "")).strip() for t in dialogue_turns if t.get("speaker") == "customer" and str(t.get("text", "")).strip()]
     agent_speech = [str(t.get("text", "")).strip() for t in dialogue_turns if t.get("speaker") == "agent" and str(t.get("text", "")).strip()]
 
-    if not cust_speech:
+    voicemail_keywords = [
+        "voicemail", "voice mail", "leave a message", "after the tone", "after the beep",
+        "trying to reach is not available", "forwarded to voicemail", "forwarded to voice mail",
+        "subscriber is currently busy", "switched off", "out of coverage", "unreachable",
+        "not available to take your call", "party you are calling", "leave your message",
+        "at the tone", "please try again later", "busy right now", "call is being forwarded",
+        " उत्तर नहीं", "व्यस्त", "स्विच ऑफ", "પોહચ બહાર", "બીઝી"
+    ]
+    is_voicemail = any(k in dialogue_lower for k in voicemail_keywords)
+
+    if is_voicemail:
+        summary = "The call was forwarded to automated voicemail as the recipient was unavailable. No direct conversation took place with the lead."
+        sentiment = "neutral"
+        interest_score = 0
+        wants_details = False
+    elif not cust_speech:
         summary = "The caller connected but remained silent throughout the interaction. No actionable information was requested or exchanged."
         sentiment = "neutral"
         interest_score = 10
@@ -110,7 +123,7 @@ def analyze_call_transcript_and_update(call_id: int, dialogue_turns: list, db: S
 
     # 4. Attempt to query Gemini API
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if gemini_key and dialogue_text.strip():
+    if gemini_key and dialogue_text.strip() and not is_voicemail:
         analysis_model = os.getenv("GEMINI_ANALYSIS_MODEL", "models/gemini-2.0-flash-exp")
         if analysis_model.startswith("models/"):
             analysis_model = analysis_model.replace("models/", "")
@@ -159,11 +172,23 @@ def analyze_call_transcript_and_update(call_id: int, dialogue_turns: list, db: S
         except Exception as e:
             print(f"[Transcript Analysis Warning] Failed to query Gemini API: {e}. Using fallback values.")
 
+    # Override for voicemail safeguard
+    if is_voicemail:
+        summary = "The call was forwarded to automated voicemail as the recipient was unavailable. No direct conversation took place with the lead."
+        sentiment = "neutral"
+        interest_score = 0
+        wants_details = False
+
     # 5. Clamp interest score
     interest_score = max(0, min(100, interest_score))
 
     # 6. Save/update to Database
     try:
+        from app.models.all_models import Call
+        call_obj = db.query(Call).filter(Call.id == call_id).first()
+        if call_obj and is_voicemail:
+            call_obj.status = "no_answer"
+
         transcript = db.query(Transcript).filter(Transcript.call_id == call_id).first()
         if transcript:
             transcript.summary = summary
